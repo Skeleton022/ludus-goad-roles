@@ -1,0 +1,4 @@
+#!/bin/sh
+if command -v setxkbmap >/dev/null 2>&1; then
+    setxkbmap -model {{ goad_kali_keyboard_model | quote }} -layout {{ goad_kali_keyboard_layout | quote }} >/dev/null 2>&1 || true
+fi

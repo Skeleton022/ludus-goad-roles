@@ -1,0 +1,17 @@
+---
+goad_timezone_linux: "Europe/Budapest"
+goad_timezone_windows: "Central Europe Standard Time"
+
+goad_keyboard_layout_linux: "hu"
+goad_keyboard_model_linux: "pc105"
+
+# Leave Windows display/user language preferences and legacy locale unchanged.
+# Enable explicitly only to reproduce the old Windows regional behavior.
+goad_windows_apply_locale_changes: false
+
+# These values are used ONLY when goad_windows_apply_locale_changes is true.
+goad_windows_language_tag: "hu-HU"
+goad_windows_geo_id: 109  # Hungary (94 is Germany)
+goad_windows_locale: "hu-HU"
+
+goad_restart_after_locale_change: false

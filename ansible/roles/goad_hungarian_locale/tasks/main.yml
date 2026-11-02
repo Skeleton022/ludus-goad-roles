@@ -1,0 +1,8 @@
+---
+- name: Configure Windows locale and time
+  ansible.builtin.include_tasks: windows.yml
+  when: ansible_os_family == "Windows"
+
+- name: Configure Linux locale and time
+  ansible.builtin.include_tasks: linux.yml
+  when: ansible_os_family != "Windows"

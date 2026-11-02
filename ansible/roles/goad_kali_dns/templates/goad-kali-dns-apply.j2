@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cat > /etc/resolv.conf <<'RESOLVEOF'
+{% for server in goad_kali_dns_servers %}
+nameserver {{ server }}
+{% endfor %}
+{% if goad_kali_dns_search_domains | length > 0 %}
+search {{ goad_kali_dns_search_domains | join(' ') }}
+{% endif %}
+RESOLVEOF

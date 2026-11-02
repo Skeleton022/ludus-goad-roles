@@ -1,0 +1,9 @@
+---
+- name: Reload systemd units
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: Restart GOAD Kali DNS service
+  ansible.builtin.systemd:
+    name: goad-kali-dns.service
+    state: restarted

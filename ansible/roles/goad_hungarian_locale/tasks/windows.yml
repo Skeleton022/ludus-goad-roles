@@ -1,0 +1,103 @@
+---
+- name: Set the Windows timezone
+  ansible.windows.win_timezone:
+    timezone: "{{ goad_timezone_windows }}"
+  register: goad_windows_timezone_result
+
+- name: Optionally configure Hungarian Windows region settings (legacy mode)
+  ansible.windows.win_region:
+    location: "{{ goad_windows_geo_id }}"
+    format: "{{ goad_windows_locale }}"
+    unicode_language: "{{ goad_windows_locale }}"
+    copy_settings: true
+  register: goad_windows_region_result
+  when: goad_windows_apply_locale_changes | bool
+
+- name: Configure Hungarian keyboard for current/default profiles without changing Windows UI language
+  ansible.windows.win_powershell:
+    script: |
+      $ErrorActionPreference = "Stop"
+
+      $LanguageTag = "{{ goad_windows_language_tag }}"
+      $Changed = $false
+
+      # The original language, culture and system-locale changes are opt-in.
+      # Default behavior only adjusts keyboard registry keys and timezone.
+      if ("{{ goad_windows_apply_locale_changes | bool | lower }}" -eq "true") {
+          $CurrentList = Get-WinUserLanguageList
+
+          if (
+              $CurrentList.Count -ne 1 -or
+              $CurrentList[0].LanguageTag -ne $LanguageTag
+          ) {
+              $NewList = New-WinUserLanguageList -Language $LanguageTag
+              Set-WinUserLanguageList -LanguageList $NewList -Force
+              $Changed = $true
+          }
+
+          Set-Culture -CultureInfo $LanguageTag
+          Set-WinSystemLocale -SystemLocale $LanguageTag
+      }
+
+      $KeyboardPreloadPaths = @(
+          "Registry::HKEY_USERS\.DEFAULT\Keyboard Layout\Preload",
+          "Registry::HKEY_CURRENT_USER\Keyboard Layout\Preload"
+      )
+
+      foreach ($Path in $KeyboardPreloadPaths) {
+          if (-not (Test-Path $Path)) {
+              New-Item -Path $Path -Force | Out-Null
+          }
+
+          $CurrentValue = Get-ItemPropertyValue `
+              -Path $Path `
+              -Name "1" `
+              -ErrorAction SilentlyContinue
+
+          if ($CurrentValue -ne "0000040e") {
+              New-ItemProperty `
+                  -Path $Path `
+                  -Name "1" `
+                  -Value "0000040e" `
+                  -PropertyType String `
+                  -Force |
+                  Out-Null
+
+              $Changed = $true
+          }
+      }
+
+      $Ansible.Changed = $Changed
+  register: goad_windows_keyboard_result
+
+- name: Ensure the Windows Time service is automatic and running
+  ansible.windows.win_service:
+    name: W32Time
+    start_mode: auto
+    state: started
+
+- name: Attempt Windows time resynchronization
+  ansible.windows.win_command:
+    cmd: w32tm.exe /resync /rediscover
+  register: goad_windows_time_resync
+  changed_when: false
+  failed_when: false
+
+- name: Show Windows keyboard and time configuration
+  ansible.builtin.debug:
+    msg:
+      - "Host: {{ inventory_hostname }}"
+      - "Timezone: {{ goad_timezone_windows }}"
+      - "Keyboard layout: 0000040e (Hungarian)"
+      - "Legacy regional changes: {{ goad_windows_apply_locale_changes | bool }}"
+      - "Time resync return code: {{ goad_windows_time_resync.rc | default('unknown') }}"
+
+- name: Reboot Windows after locale changes
+  ansible.windows.win_reboot:
+    reboot_timeout: 1800
+  when:
+    - goad_restart_after_locale_change | bool
+    - >
+      goad_windows_timezone_result.changed or
+      (goad_windows_region_result.changed | default(false)) or
+      goad_windows_keyboard_result.changed

@@ -1,0 +1,106 @@
+---
+- name: Set the Linux timezone
+  community.general.timezone:
+    name: "{{ goad_timezone_linux }}"
+
+- name: Install keyboard configuration packages on Debian-based systems
+  ansible.builtin.apt:
+    name:
+      - keyboard-configuration
+      - console-setup
+    state: present
+    update_cache: false
+  when: ansible_os_family == "Debian"
+
+- name: Configure the Linux keyboard
+  ansible.builtin.copy:
+    dest: /etc/default/keyboard
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      XKBMODEL="{{ goad_keyboard_model_linux }}"
+      XKBLAYOUT="{{ goad_keyboard_layout_linux }}"
+      XKBVARIANT=""
+      XKBOPTIONS=""
+      BACKSPACE="guess"
+  register: goad_linux_keyboard
+
+- name: Ensure the X11 keyboard configuration directory exists
+  ansible.builtin.file:
+    path: /etc/X11/xorg.conf.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Configure Hungarian keyboard for graphical Linux sessions
+  ansible.builtin.copy:
+    dest: /etc/X11/xorg.conf.d/00-goad-hungarian-keyboard.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      Section "InputClass"
+          Identifier "GOAD Hungarian keyboard"
+          MatchIsKeyboard "on"
+          Option "XkbModel" "{{ goad_keyboard_model_linux }}"
+          Option "XkbLayout" "{{ goad_keyboard_layout_linux }}"
+      EndSection
+  register: goad_linux_x11_keyboard
+
+- name: Ensure the X11 session configuration directory exists
+  ansible.builtin.file:
+    path: /etc/X11/Xsession.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Configure Hungarian keyboard for new X11 sessions
+  ansible.builtin.copy:
+    dest: /etc/X11/Xsession.d/90goad-hungarian-keyboard
+    owner: root
+    group: root
+    mode: "0755"
+    content: |
+      #!/bin/sh
+      if command -v setxkbmap >/dev/null 2>&1; then
+          setxkbmap \
+              -model "{{ goad_keyboard_model_linux }}" \
+              -layout "{{ goad_keyboard_layout_linux }}" ||
+              true
+      fi
+
+- name: Apply the Linux console keyboard
+  ansible.builtin.command:
+    cmd: setupcon
+  changed_when: false
+  failed_when: false
+
+- name: Enable network time synchronization
+  ansible.builtin.command:
+    cmd: timedatectl set-ntp true
+  changed_when: false
+  failed_when: false
+
+- name: Read the resulting Linux time configuration
+  ansible.builtin.command:
+    cmd: timedatectl
+  register: goad_linux_timedatectl
+  changed_when: false
+
+- name: Show the Linux locale and time configuration
+  ansible.builtin.debug:
+    msg:
+      - "Host: {{ inventory_hostname }}"
+      - "Timezone: {{ goad_timezone_linux }}"
+      - "Keyboard layout: {{ goad_keyboard_layout_linux }}"
+      - "{{ goad_linux_timedatectl.stdout_lines }}"
+
+- name: Reboot Linux after keyboard changes
+  ansible.builtin.reboot:
+    reboot_timeout: 900
+  when:
+    - goad_restart_after_locale_change | bool
+    - goad_linux_keyboard.changed or goad_linux_x11_keyboard.changed

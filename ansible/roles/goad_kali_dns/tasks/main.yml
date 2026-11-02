@@ -1,0 +1,198 @@
+---
+- name: Validate supported operating system
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.os_family == "Debian"
+    fail_msg: "This role currently supports Debian-family systems only."
+
+- name: Validate the default IPv4 address
+  ansible.builtin.assert:
+    that:
+      - ansible_default_ipv4.address is defined
+      - ansible_default_ipv4.address is match('^[0-9]{1,3}(\\.[0-9]{1,3}){3}$')
+    fail_msg: "No valid default IPv4 address was detected."
+
+- name: Derive the current VLAN IPv4 prefix
+  ansible.builtin.set_fact:
+    goad_kali_dns_prefix: >-
+      {{ ansible_default_ipv4.address.split('.')[0:3] | join('.') }}
+
+- name: Initialize the dynamic DNS server list
+  ansible.builtin.set_fact:
+    goad_kali_dns_servers: []
+
+- name: Add the GOAD DNS servers
+  ansible.builtin.set_fact:
+    goad_kali_dns_servers: "{{ goad_kali_dns_servers + [goad_kali_dns_prefix ~ '.' ~ (item | string)] }}"
+  loop: "{{ goad_kali_dns_server_last_octets }}"
+
+- name: Add the router fallback DNS server
+  ansible.builtin.set_fact:
+    goad_kali_dns_servers: >-
+      {{ goad_kali_dns_servers + [goad_kali_dns_prefix ~ '.' ~ (goad_kali_dns_router_last_octet | string)] }}
+  when: goad_kali_dns_include_router_fallback | bool
+
+- name: Check whether nmcli is available
+  ansible.builtin.shell: command -v nmcli
+  register: goad_kali_dns_nmcli
+  changed_when: false
+  failed_when: false
+
+- name: Detect active NetworkManager connection for the interface
+  ansible.builtin.shell: |
+    set -o pipefail
+    nmcli -t -f GENERAL.CONNECTION device show {{ goad_kali_dns_interface | quote }} \
+      | sed -n 's/^GENERAL.CONNECTION://p'
+  args:
+    executable: /bin/bash
+  register: goad_kali_dns_connection
+  changed_when: false
+  failed_when: false
+  when: goad_kali_dns_nmcli.rc == 0
+
+- name: Select DNS configuration backend
+  ansible.builtin.set_fact:
+    goad_kali_dns_use_networkmanager: >-
+      {{
+        goad_kali_dns_nmcli.rc == 0
+        and (goad_kali_dns_connection.stdout | default('') | trim | length > 0)
+        and (goad_kali_dns_connection.stdout | trim != '--')
+      }}
+
+- name: Configure DNS through NetworkManager
+  when: goad_kali_dns_use_networkmanager | bool
+  block:
+    - name: Set NetworkManager DNS servers and search domains
+      ansible.builtin.command:
+        argv:
+          - nmcli
+          - connection
+          - modify
+          - "{{ goad_kali_dns_connection.stdout | trim }}"
+          - ipv4.ignore-auto-dns
+          - "yes"
+          - ipv4.dns
+          - "{{ goad_kali_dns_servers | join(' ') }}"
+          - ipv4.dns-search
+          - "{{ goad_kali_dns_search_domains | join(',') }}"
+      register: goad_kali_dns_nm_modify
+      changed_when: goad_kali_dns_nm_modify.rc == 0
+
+    - name: Reactivate the NetworkManager connection
+      ansible.builtin.command:
+        argv:
+          - nmcli
+          - connection
+          - up
+          - "{{ goad_kali_dns_connection.stdout | trim }}"
+      register: goad_kali_dns_nm_up
+      changed_when: goad_kali_dns_nm_up.rc == 0
+
+- name: Configure persistent DNS for an unmanaged interface
+  when: not (goad_kali_dns_use_networkmanager | bool)
+  block:
+    - name: Install the resolver apply script
+      ansible.builtin.template:
+        src: goad-kali-dns-apply.j2
+        dest: /usr/local/sbin/goad-kali-dns-apply
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Install the resolver systemd service
+      ansible.builtin.template:
+        src: goad-kali-dns.service.j2
+        dest: /etc/systemd/system/goad-kali-dns.service
+        owner: root
+        group: root
+        mode: "0644"
+      notify:
+        - Reload systemd units
+        - Restart GOAD Kali DNS service
+
+    - name: Enable and start the resolver service
+      ansible.builtin.systemd:
+        name: goad-kali-dns.service
+        daemon_reload: true
+        enabled: true
+        state: started
+
+- name: Configure the system-wide keyboard layout
+  ansible.builtin.template:
+    src: keyboard.j2
+    dest: /etc/default/keyboard
+    owner: root
+    group: root
+    mode: "0644"
+  register: goad_kali_keyboard_file
+
+- name: Ensure the X11 keyboard configuration directory exists
+  ansible.builtin.file:
+    path: /etc/X11/xorg.conf.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Configure the system-wide X11 keyboard layout
+  ansible.builtin.template:
+    src: xorg-keyboard.conf.j2
+    dest: /etc/X11/xorg.conf.d/00-goad-keyboard.conf
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Configure the keyboard layout for new graphical sessions
+  ansible.builtin.template:
+    src: xsession-keyboard.sh.j2
+    dest: /etc/X11/Xsession.d/90goad-hungarian-keyboard
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Apply the console keyboard layout when setupcon is available
+  ansible.builtin.command: setupcon
+  register: goad_kali_setupcon
+  changed_when: goad_kali_keyboard_file.changed
+  failed_when: false
+  when: goad_kali_keyboard_file.changed
+
+- name: Find active graphical display sockets
+  ansible.builtin.find:
+    paths: /tmp/.X11-unix
+    patterns: "X*"
+    file_type: any
+  register: goad_kali_x11_sockets
+  failed_when: false
+  changed_when: false
+
+- name: Apply the keyboard layout to active graphical sessions
+  ansible.builtin.shell: |
+    display=":{{ item.path | basename | regex_replace('^X', '') }}"
+    for proc in /proc/[0-9]*; do
+      [ -r "$proc/environ" ] || continue
+      if tr '\0' '\n' < "$proc/environ" | grep -qx "DISPLAY=$display"; then
+        uid=$(stat -c '%u' "$proc")
+        user=$(getent passwd "$uid" | cut -d: -f1)
+        [ -n "$user" ] || continue
+        xauth=$(tr '\0' '\n' < "$proc/environ" | sed -n 's/^XAUTHORITY=//p' | head -n1)
+        if [ -n "$xauth" ]; then
+          runuser -u "$user" -- env DISPLAY="$display" XAUTHORITY="$xauth" setxkbmap -model {{ goad_kali_keyboard_model | quote }} -layout {{ goad_kali_keyboard_layout | quote }} && exit 0
+        else
+          runuser -u "$user" -- env DISPLAY="$display" setxkbmap -model {{ goad_kali_keyboard_model | quote }} -layout {{ goad_kali_keyboard_layout | quote }} && exit 0
+        fi
+      fi
+    done
+    exit 0
+  args:
+    executable: /bin/bash
+  loop: "{{ goad_kali_x11_sockets.files | default([]) }}"
+  changed_when: false
+  failed_when: false
+
+- name: Show the applied Kali configuration
+  ansible.builtin.debug:
+    msg:
+      - "DNS backend: {{ 'NetworkManager' if goad_kali_dns_use_networkmanager else 'persistent resolver service' }}"
+      - "DNS servers on {{ goad_kali_dns_interface }}: {{ goad_kali_dns_servers | join(', ') }}"
+      - "Keyboard layout: {{ goad_kali_keyboard_layout }}"

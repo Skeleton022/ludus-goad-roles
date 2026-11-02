@@ -1,0 +1,13 @@
+---
+goad_kali_dns_interface: "{{ ansible_default_ipv4.interface | default('eth0') }}"
+goad_kali_dns_server_last_octets:
+  - 10
+  - 11
+goad_kali_dns_include_router_fallback: true
+goad_kali_dns_router_last_octet: 254
+goad_kali_dns_search_domains:
+  - sevenkingdoms.local
+  - north.sevenkingdoms.local
+  - essos.local
+goad_kali_keyboard_layout: hu
+goad_kali_keyboard_model: pc105

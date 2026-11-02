@@ -1,0 +1,12 @@
+---
+galaxy_info:
+  role_name: goad_kali_dns
+  author: OpenAI
+  description: Configure dynamic GOAD DNS and Hungarian keyboard layout on Kali.
+  license: MIT
+  min_ansible_version: "2.14"
+  platforms:
+    - name: Debian
+      versions:
+        - all
+dependencies: []

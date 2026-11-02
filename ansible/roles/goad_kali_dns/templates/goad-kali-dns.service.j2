@@ -1,0 +1,12 @@
+[Unit]
+Description=Apply GOAD Kali DNS configuration
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/goad-kali-dns-apply
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

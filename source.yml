@@ -1,0 +1,7 @@
+manifest_version: 1
+name: "GOAD Custom Ludus Roles"
+description: "Custom Ludus Ansible roles for GOAD timezone, keyboard and Kali DNS"
+authors:
+  - "Skeleton022"
+homepage: https://github.com/Skeleton022/ludus-goad-roles
+license: MIT
