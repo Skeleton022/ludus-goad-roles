@@ -1,0 +1,10 @@
+---
+# Host-side path. The four supplied files are copied here without modification.
+php2shell_root: /opt/php2shell
+
+# Only the published host port is changed from the trainer's 1337 to 80.
+# The container remains on TCP/80 and uses the original Dockerfile unchanged.
+php2shell_http_port: 80
+php2shell_bind_address: "0.0.0.0"
+php2shell_image: "php2shell:8.4.26"
+php2shell_container_name: "php2shell"

@@ -1,0 +1,14 @@
+---
+galaxy_info:
+  role_name: php2shell
+  author: Ludus lab
+  description: >-
+    Deploy the exact supplied PHP 8.4.26 Apache lab Dockerfile, static index.php,
+    and flag.txt on a Docker-equipped Ludus Linux VM.
+  license: Unspecified
+  min_ansible_version: "2.12"
+  platforms:
+    - name: Debian
+      versions:
+        - all
+dependencies: []

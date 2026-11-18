@@ -1,0 +1,203 @@
+---
+- name: Deploy the PHP2Shell Docker lab
+  become: true
+  block:
+    - name: Validate target and exposed port
+      ansible.builtin.assert:
+        that:
+          - ansible_system == 'Linux'
+          - php2shell_http_port | int >= 1
+          - php2shell_http_port | int <= 65535
+          - php2shell_bind_address | length > 0
+        fail_msg: "php2shell requires a Linux host and a valid HTTP host port."
+
+    - name: Require a running Docker Engine
+      ansible.builtin.command:
+        argv:
+          - docker
+          - info
+      register: php2shell_docker_info
+      changed_when: false
+
+    - name: Create the challenge build directory
+      ansible.builtin.file:
+        path: "{{ php2shell_root }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Copy all four original trainer files to the build directory
+      ansible.builtin.copy:
+        src: "{{ item.name }}"
+        dest: "{{ php2shell_root }}/{{ item.name }}"
+        owner: root
+        group: root
+        mode: "{{ item.mode }}"
+      loop:
+        - { name: Dockerfile, mode: '0644' }
+        - { name: index.php, mode: '0644' }
+        - { name: flag.txt, mode: '0644' }
+      register: php2shell_copied_files
+
+    - name: Inspect Docker image before building
+      ansible.builtin.command:
+        argv:
+          - docker
+          - image
+          - inspect
+          - "{{ php2shell_image }}"
+      register: php2shell_image_before
+      changed_when: false
+      failed_when: false
+
+    - name: Build the image from the original Dockerfile and resources
+      ansible.builtin.command:
+        argv:
+          - docker
+          - build
+          - --tag
+          - "{{ php2shell_image }}"
+          - .
+        chdir: "{{ php2shell_root }}"
+      when: php2shell_copied_files.changed or php2shell_image_before.rc != 0
+      register: php2shell_build_result
+
+    - name: Inspect the resulting image
+      ansible.builtin.command:
+        argv:
+          - docker
+          - image
+          - inspect
+          - "{{ php2shell_image }}"
+      register: php2shell_image_after
+      changed_when: false
+
+    - name: Inspect the existing challenge container
+      ansible.builtin.command:
+        argv:
+          - docker
+          - container
+          - inspect
+          - "{{ php2shell_container_name }}"
+      register: php2shell_existing_container
+      changed_when: false
+      failed_when: false
+
+    - name: Determine whether the running container already matches the desired configuration
+      ansible.builtin.set_fact:
+        php2shell_keep_existing: >-
+          {{
+            (php2shell_existing_container.rc == 0)
+            and (not php2shell_build_result.changed)
+            and ((php2shell_existing_container.stdout | from_json | first).State.Running | bool)
+            and ((php2shell_existing_container.stdout | from_json | first).Image ==
+                 (php2shell_image_after.stdout | from_json | first).Id)
+            and (
+              (
+                (php2shell_existing_container.stdout | from_json | first).HostConfig.PortBindings
+                | default({}, true)
+              ).get('80/tcp', [])
+              | selectattr('HostIp', 'equalto', php2shell_bind_address)
+              | selectattr('HostPort', 'equalto', php2shell_http_port | string)
+              | list | length > 0
+            )
+          }}
+
+    - name: Find containers already publishing the desired host HTTP port
+      ansible.builtin.command:
+        argv:
+          - docker
+          - ps
+          - --filter
+          - "publish={{ php2shell_http_port }}"
+          - --format
+          - "{% raw %}{{.Names}}{% endraw %}"
+      register: php2shell_port_owners
+      changed_when: false
+
+    - name: Refuse to remove an unrelated container bound to the same HTTP port
+      ansible.builtin.assert:
+        that:
+          - (php2shell_port_owners.stdout_lines | difference([php2shell_container_name]) | length) == 0
+        fail_msg: >-
+          TCP port {{ php2shell_http_port }} is already published by
+          {{ php2shell_port_owners.stdout_lines | difference([php2shell_container_name]) }}.
+          Stop the previous challenge container manually before rerunning this role.
+
+    - name: Remove obsolete instance of this role's container
+      ansible.builtin.command:
+        argv:
+          - docker
+          - container
+          - rm
+          - -f
+          - "{{ php2shell_container_name }}"
+      when:
+        - not php2shell_keep_existing | bool
+        - php2shell_existing_container.rc == 0
+
+    - name: Run the challenge in the background with a persistent restart policy
+      ansible.builtin.command:
+        argv:
+          - docker
+          - run
+          - -d
+          - --name
+          - "{{ php2shell_container_name }}"
+          - --restart
+          - unless-stopped
+          - -p
+          - "{{ php2shell_bind_address }}:{{ php2shell_http_port }}:80"
+          - "{{ php2shell_image }}"
+      when: not php2shell_keep_existing | bool
+
+    - name: Read PHP version inside the running container
+      ansible.builtin.command:
+        argv:
+          - docker
+          - exec
+          - "{{ php2shell_container_name }}"
+          - php
+          - -r
+          - "echo PHP_VERSION;"
+      register: php2shell_actual_php_version
+      changed_when: false
+
+    - name: Enforce the exact trainer PHP version
+      ansible.builtin.assert:
+        that:
+          - php2shell_actual_php_version.stdout | trim == '8.4.26'
+        fail_msg: >-
+          Expected PHP 8.4.26 from the provided Dockerfile, got
+          {{ php2shell_actual_php_version.stdout | trim }}.
+
+    - name: Verify the lab flag was copied into the container
+      ansible.builtin.command:
+        argv:
+          - docker
+          - exec
+          - "{{ php2shell_container_name }}"
+          - test
+          - -f
+          - /flag.txt
+      changed_when: false
+
+    - name: Check the NOVA storefront HTTP response
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ php2shell_http_port }}/"
+        status_code: 200
+        return_content: true
+        timeout: 10
+        use_proxy: false
+      register: php2shell_http_response
+      retries: 12
+      delay: 2
+      until: php2shell_http_response.status | default(0) == 200
+      when: php2shell_bind_address in ['0.0.0.0', '127.0.0.1']
+
+    - name: Verify NOVA HTML is served from the provided index.php
+      ansible.builtin.assert:
+        that:
+          - "'NOVA' in php2shell_http_response.content"
+      when: php2shell_bind_address in ['0.0.0.0', '127.0.0.1']
