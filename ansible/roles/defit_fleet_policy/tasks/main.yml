@@ -1,0 +1,54 @@
+---
+- name: Install DEFIT Fleet helper on Elastic VM
+  ansible.builtin.copy:
+    src: defit_fleet_policy.py
+    dest: "{{ defit_fleet_install_path }}/defit-fleet-policy.py"
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: Apply DEFIT Fleet policy changes
+  ansible.builtin.command:
+    argv:
+      - "{{ defit_fleet_python }}"
+      - "{{ defit_fleet_install_path }}/defit-fleet-policy.py"
+      - --install-path
+      - "{{ defit_fleet_install_path }}"
+      - --url
+      - "{{ defit_fleet_kibana_url }}"
+      - --old-name
+      - "{{ defit_fleet_old_policy_name }}"
+      - --new-name
+      - "{{ defit_fleet_policy_name }}"
+      - --docker-version
+      - "{{ defit_fleet_docker_version }}"
+      - --network-version
+      - "{{ defit_fleet_network_version }}"
+      - --condition
+      - "{{ defit_fleet_condition }}"
+      - --capture-interface
+      - "{{ defit_fleet_capture_interface }}"
+      - --defend-integration-name
+      - "{{ defit_fleet_defend_integration_name }}"
+      - --http-ports
+      - "{{ defit_fleet_http_ports }}"
+      - --verify-tls
+      - "{{ defit_fleet_verify_tls | bool | ternary('true', 'false') }}"
+      - --dry-run
+      - "{{ defit_fleet_dry_run | bool | ternary('true', 'false') }}"
+  register: defit_fleet_apply
+  changed_when: >-
+    defit_fleet_apply.rc == 0 and
+    ((defit_fleet_apply.stdout | from_json).changed | bool)
+  failed_when: defit_fleet_apply.rc != 0
+  # Intentionally do not hide the Fleet API error messages.
+  no_log: false
+
+- name: Display DEFIT Fleet operation log
+  ansible.builtin.debug:
+    var: defit_fleet_apply.stderr_lines
+  when: defit_fleet_apply.stderr_lines | length > 0
+
+- name: Display DEFIT Fleet result
+  ansible.builtin.debug:
+    msg: "{{ defit_fleet_apply.stdout | from_json }}"

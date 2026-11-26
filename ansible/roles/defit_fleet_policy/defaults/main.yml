@@ -1,0 +1,16 @@
+---
+defit_fleet_install_path: /opt/elastic_container
+defit_fleet_python: /usr/bin/python3
+defit_fleet_kibana_url: https://127.0.0.1:5601
+defit_fleet_old_policy_name: Ludus-Agent-Policy
+defit_fleet_policy_name: DEFIT-Agent-Policy
+# Pinned to versions verified on the STUDENT5 Kibana 9.5.5 deployment.
+defit_fleet_docker_version: "2.16.1"
+defit_fleet_network_version: "2.0.0"
+defit_fleet_condition: "${host.platform} == 'linux' and match(${host.name}, '(?i).*php2shell.*')"
+defit_fleet_capture_interface: any
+defit_fleet_http_ports: "80"
+defit_fleet_verify_tls: false
+defit_fleet_dry_run: false
+# Exact integration name created by the Elastic container setup role.
+defit_fleet_defend_integration_name: elastic-defend-1
